@@ -4,14 +4,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 
 import com.alibaba.fastjson.JSON
-import com.atguigu.DauHandler
 import com.atguigu.bean.StartUpLog
 import com.atguigu.constants.GmallConstant
+import com.atguigu.handler.DauHandler
 import com.atguigu.utils.MyKafkaUtil
+import org.apache.hadoop.hbase.HBaseConfiguration
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.apache.phoenix.spark._
 
 object DauApp {
 
@@ -65,6 +67,14 @@ object DauApp {
     DauHandler.saveMidToRedis(filterByMid)
 
     //8.将两次去重之后的结果写入HBase(Phoenix)
+    filterByMid.foreachRDD(rdd => {
+      rdd.saveToPhoenix("GMALL200720_DAU",
+        //        Seq("MID", "UID", "APPID", "AREA", "OS", "CH", "TYPE", "VS", "LOGDATE", "LOGHOUR", "TS"),
+        classOf[StartUpLog].getDeclaredFields.map(_.getName.toUpperCase),
+        HBaseConfiguration.create(),
+        Some("hadoop102,hadoop103,hadoop104:2181")
+      )
+    })
 
     //9.开启任务
     ssc.start()
