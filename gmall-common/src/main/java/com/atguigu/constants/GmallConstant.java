@@ -11,4 +11,7 @@ public class GmallConstant {
     //订单数据主题
     public static final String GMALL_ORDER_INFO_TOPIC = "TOPIC_ORDER_INFO";
 
+    //预警日志ES索引前缀
+    public static final String GMALL_ALERT_INFO_ES_PREFIX = "gmall_coupon_alert";
+
 }
