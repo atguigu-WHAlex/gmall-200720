@@ -1,12 +1,14 @@
 package com.atguigu.app
 
 import java.sql.Connection
+import java.text.SimpleDateFormat
 import java.util
+import java.util.Date
 
 import com.alibaba.fastjson.JSON
 import com.atguigu.bean.{OrderDetail, OrderInfo, SaleDetail, UserInfo}
 import com.atguigu.constants.GmallConstant
-import com.atguigu.utils.{JdbcUtil, MyKafkaUtil, RedisUtil}
+import com.atguigu.utils.{JdbcUtil, MyEsUtil, MyKafkaUtil, RedisUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
@@ -156,7 +158,7 @@ object SaleDetailApp {
           saleDetail.mergeUserInfo(userInfo)
 
           //重置过期时间
-          jedisClient.expire(userRedisKey, 10 * 24 * 60 * 60)
+          jedisClient.expire(userRedisKey, 24 * 60 * 60)
 
           saleDetail
         } else {
@@ -174,7 +176,7 @@ object SaleDetailApp {
 
           //将数据写入Redis
           jedisClient.set(s"UserInfo:${saleDetail.user_id}", userInfoStr)
-          jedisClient.expire(s"UserInfo:${saleDetail.user_id}", 10 * 24 * 60 * 60)
+          jedisClient.expire(s"UserInfo:${saleDetail.user_id}", 24 * 60 * 60)
 
           val userInfo: UserInfo = JSON.parseObject(userInfoStr, classOf[UserInfo])
           saleDetail.mergeUserInfo(userInfo)
@@ -192,10 +194,9 @@ object SaleDetailApp {
       result
     })
 
-
     //打印测试
     //    noUserSaleDetailDStream.print(100)
-    saleDetailDStream.print(100)
+    //    saleDetailDStream.print(100)
     //    value.print()
     //    orderInfoKafkaDStream.foreachRDD(rdd => {
     //      rdd.foreachPartition(iter => {
@@ -211,6 +212,22 @@ object SaleDetailApp {
     //        })
     //      })
     //    })
+
+    //7.将数据写入ES
+    val sdf = new SimpleDateFormat("yyyy-MM-dd")
+    saleDetailDStream.foreachRDD(rdd => {
+
+      rdd.foreachPartition(iter => {
+
+        val list: List[(String, SaleDetail)] = iter.map(saleDetail => (s"${saleDetail.order_id}_${saleDetail.order_detail_id}", saleDetail)).toList
+
+        val indexName = s"${GmallConstant.GMALL_SALE_DETAIL_ES_PREFIX}_${sdf.format(new Date(System.currentTimeMillis()))}"
+
+        MyEsUtil.insertBulk(indexName, list)
+
+      })
+
+    })
 
     //启动任务
     ssc.start()

@@ -40,7 +40,7 @@ object UserInfoApp {
           jedisClient.set(s"UserInfo:${info.id}", userInfoStr)
 
           //防止冷数据在Redis中长期保存
-          jedisClient.expire(s"UserInfo:${info.id}", 10 * 24 * 60 * 60)
+          jedisClient.expire(s"UserInfo:${info.id}", 24 * 60 * 60)
 
         })
 
