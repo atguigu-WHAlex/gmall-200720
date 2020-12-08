@@ -1,20 +1,21 @@
 package com.atguigu.app
 
+import java.sql.Connection
 import java.util
 
-import com.alibaba.fastjson.{JSON, JSONObject}
-import com.atguigu.bean.{OrderDetail, OrderInfo, SaleDetail}
+import com.alibaba.fastjson.JSON
+import com.atguigu.bean.{OrderDetail, OrderInfo, SaleDetail, UserInfo}
 import com.atguigu.constants.GmallConstant
-import com.atguigu.utils.{MyKafkaUtil, RedisUtil}
+import com.atguigu.utils.{JdbcUtil, MyKafkaUtil, RedisUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.json4s.DefaultFormats
-import redis.clients.jedis.Jedis
 import org.json4s.native.Serialization
-import scala.collection.JavaConverters._
+import redis.clients.jedis.Jedis
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
 
 object SaleDetailApp {
@@ -135,8 +136,66 @@ object SaleDetailApp {
       details.toIterator
     })
 
+    //6.反查Redis,补充用户信息
+    val saleDetailDStream: DStream[SaleDetail] = noUserSaleDetailDStream.mapPartitions(iter => {
+
+      //a.获取Redis连接
+      val jedisClient: Jedis = RedisUtil.getJedisClient
+
+      //b.遍历,查询Redis中用户信息并补充
+      val result: Iterator[SaleDetail] = iter.map(saleDetail => {
+
+        val userRedisKey = s"UserInfo:${saleDetail.user_id}"
+
+        //查询Redis中是否存在该用户信息
+        if (jedisClient.exists(userRedisKey)) {
+
+          //Redis中存在,查询Redis,说明该用户有下单,即近期活跃过
+          val userInfoStr: String = jedisClient.get(userRedisKey)
+          val userInfo: UserInfo = JSON.parseObject(userInfoStr, classOf[UserInfo])
+          saleDetail.mergeUserInfo(userInfo)
+
+          //重置过期时间
+          jedisClient.expire(userRedisKey, 10 * 24 * 60 * 60)
+
+          saleDetail
+        } else {
+
+          //Redis中不存在,查询MySQL
+          //获取连接
+          val connection: Connection = JdbcUtil.getConnection
+
+          //查询数据
+          val userInfoStr: String = JdbcUtil.getJsonDataFromMysql(connection,
+            "select * from user_info where id = ?",
+            Array(saleDetail.user_id))
+
+          println(userInfoStr)
+
+          //将数据写入Redis
+          jedisClient.set(s"UserInfo:${saleDetail.user_id}", userInfoStr)
+          jedisClient.expire(s"UserInfo:${saleDetail.user_id}", 10 * 24 * 60 * 60)
+
+          val userInfo: UserInfo = JSON.parseObject(userInfoStr, classOf[UserInfo])
+          saleDetail.mergeUserInfo(userInfo)
+
+          connection.close()
+
+          saleDetail
+        }
+      })
+
+      //c.归还连接
+      jedisClient.close()
+
+      //d.返回结果数据
+      result
+    })
+
+
     //打印测试
-    noUserSaleDetailDStream.print(100)
+    //    noUserSaleDetailDStream.print(100)
+    saleDetailDStream.print(100)
     //    value.print()
     //    orderInfoKafkaDStream.foreachRDD(rdd => {
     //      rdd.foreachPartition(iter => {
